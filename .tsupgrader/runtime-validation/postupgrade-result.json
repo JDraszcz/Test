@@ -1,0 +1,38 @@
+{
+  "planHash": "0ccc456d0fffdf3fffd4b69fd5196e0de8a3d121b138b86f52dce347cb5b3e09",
+  "phase": "postupgrade",
+  "recordedAtUtc": "2026-09-14T15:08:09.6221649Z",
+  "retryCount": 0,
+  "resetBaseline": false,
+  "result": {
+    "setupSucceeded": true,
+    "setupDurationMs": 1765,
+    "setupFailureOutput": null,
+    "assertions": [
+      {
+        "name": "tsc-no-emit",
+        "kind": "process",
+        "verificationMethod": "exit-code",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": 0,
+        "outputSample": "",
+        "durationMs": 1481
+      },
+      {
+        "name": "dev-server-serves-home",
+        "kind": "http-probe",
+        "verificationMethod": "http-status",
+        "passed": true,
+        "timedOut": false,
+        "skipped": false,
+        "skippedReason": null,
+        "exitCode": null,
+        "outputSample": "HTTP 200\n\u003C!DOCTYPE html\u003E\n\u003Chtml lang=\u0022en\u0022\u003E\n  \u003Chead\u003E\n    \u003Cmeta charset=\u0022utf-8\u0022 /\u003E\n    \u003Cmeta httpEquiv=\u0022X-UA-Compatible\u0022 content=\u0022IE=edge\u0022 /\u003E\n    \u003Cmeta name=\u0022viewport\u0022 content=\u0022width=device-width, initial-scale=1, shrink-to-fit=no\u0022 /\u003E\n    \u003Ctitle\u003Etest-mobile\u003C/title\u003E\n    \u003C!-- The \u0060react-native-web\u0060 recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element --\u003E\n    \u003Cstyle id=\u0022expo-reset\u0022\u003E\n      /* These styles make the body full-height */\n      html,\n      body {\n        height: 100%;\n      }\n      /* These styles disable body scrolling if you are using \u003CScrollView\u003E */\n      body {\n        overflow: hidden;\n      }\n      /* These styles make the root element full-height */\n      #root {\n        display: flex;\n        height: 100%;\n        flex: 1;\n      }\n    \u003C/style\u003E\n  \u003C/head\u003E\n\n  \u003Cbody\u003E\n    \u003C!-- Use static rendering with Expo Router to support running without JavaScript. --\u003E\n    \u003Cnoscript\u003E\n      You need to enable JavaScript to run this app.\n    \u003C/noscript\u003E\n    \u003C!-- The root element for your Expo app. --\u003E\n    \u003Cdiv id=\u0022root\u0022\u003E\u003C/div\u003E\n  \u003Cscript src=\u0022/index.ts.bundle?platform=web\u0026dev=true\u0026hot=false\u0026lazy=true\u0026transform.engine=hermes\u0026transform.routerRoot=app\u0026unstable_transformProfile=hermes-stable\u0022 defer\u003E\u003C/script\u003E\u003C/body\u003E\n\u003C/html\u003E\n\n--- server output ---\n\r\n\u003E test-mobile@1.0.0 web\r\n\u003E expo start --web\r\n\r\n",
+        "durationMs": 465
+      }
+    ]
+  }
+}
