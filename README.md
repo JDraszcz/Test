@@ -50,3 +50,19 @@ et scanner le QR code avec l'application **Expo Go**.
 2. Activer/désactiver l'option audio.
 3. Activer le mode micro éteint.
 4. Vérifier l'affichage des blocs : audio, transcription, synthèse, image.
+
+### 5) Préparation de l'intégration Notion
+
+L'écran **Notion** demande une connexion lors de la première visite, puis permet d'exporter tous les cours. Le payload est défini dans `notion.ts` avec les propriétés `Name`, `Jour`, `Horaire` et `Tags`.
+
+Pour activer l'envoi réel :
+
+1. Créer une intégration Notion et partager la base cible avec cette intégration.
+2. Copier `.env.example` vers `.env` et renseigner les identifiants Notion.
+3. Démarrer le backend avec `npm run backend`.
+4. Configurer dans Notion l'URL de redirection `http://localhost:8787/api/notion/oauth/callback`.
+5. Lancer Expo avec `npm run web`, puis cliquer sur **Se connecter à Notion**.
+6. Le backend échange le code OAuth contre un token, le garde dans une session HttpOnly, puis redirige vers `testmobile://notion/callback?notion_connected=true`.
+7. Le bouton **Exporter tous les cours** envoie chaque cours à `https://api.notion.com/v1/pages`.
+
+Le client ne reçoit jamais le token Notion. L'export reste bloqué tant que le callback OAuth n'a pas confirmé la connexion.
