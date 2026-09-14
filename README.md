@@ -6,11 +6,12 @@ Application mobile Expo (React Native + TypeScript) pour gérer un agenda hebdom
 
 - Agenda hebdomadaire structuré du lundi au vendredi.
 - Création d'évènements de cours (jour, nom du cours, heure de début/fin).
-- Option de proposition d'enregistrement audio à la création d'évènement.
-- Option **mode micro éteint** (simulé) pour produire un audio estimé plus léger.
-- Génération locale (simulée) des sorties suivantes par évènement :
-  - fichier audio léger (métadonnées),
-  - retranscription textuelle,
+- Création d'un cours depuis un bouton flottant, avec horaires par tranches de 30 minutes.
+- Catégories réutilisables et conservées localement pour relier les cours entre eux.
+- Captation audio réelle dans les navigateurs compatibles, avec arrêt manuel ou à l'heure de fin.
+- Sorties par évènement :
+  - fichier audio capturé dans le navigateur (WebM),
+  - étape de retranscription après l'arrêt (le moteur distant de retranscription reste à connecter),
   - synthèse du cours,
   - concept d'image liée au cours.
 
@@ -47,9 +48,10 @@ et scanner le QR code avec l'application **Expo Go**.
 ### 4) Vérification rapide
 
 1. Ajouter un cours sur un jour (lundi-vendredi).
-2. Activer/désactiver l'option audio.
-3. Activer le mode micro éteint.
-4. Vérifier l'affichage des blocs : audio, transcription, synthèse, image.
+2. Cliquer sur le bouton flottant « + ».
+3. Renseigner le cours, les catégories et sélectionner les horaires.
+4. Cliquer sur « Démarrer la prise de notes audio » et autoriser l'accès au microphone.
+5. Arrêter depuis la carte du cours, puis vérifier le passage par l'étape de retranscription.
 
 ### 5) Préparation de l'intégration Notion
 

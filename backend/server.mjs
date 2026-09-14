@@ -1,6 +1,22 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
+
+const loadDotEnv = async () => {
+  try {
+    const content = await readFile(new URL('../.env', import.meta.url), 'utf8');
+    for (const line of content.split(/\r?\n/)) {
+      const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (!match || process.env[match[1]]) continue;
+      process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+};
+
+await loadDotEnv();
 
 const port = Number(process.env.PORT ?? 8787);
 const notionClientId = process.env.NOTION_CLIENT_ID;
@@ -12,11 +28,19 @@ const notionDatabaseId = process.env.NOTION_DATABASE_ID;
 const sessions = new Map();
 const oauthStates = new Map();
 
-const sendJson = (response, statusCode, payload, headers = {}) => {
+const getAllowedOrigin = (request) => {
+  const origin = request.headers.origin;
+  if (!origin) return appOrigin;
+  if (origin === appOrigin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
+  return appOrigin;
+};
+
+const sendJson = (request, response, statusCode, payload, headers = {}) => {
   response.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Credentials': 'true',
-    'Access-Control-Allow-Origin': appOrigin,
+    'Access-Control-Allow-Origin': getAllowedOrigin(request),
+    'Vary': 'Origin',
     ...headers,
   });
   response.end(JSON.stringify(payload));
@@ -40,11 +64,11 @@ const parseCookies = (request) =>
 const createNotionPage = (event) => ({
   parent: { database_id: notionDatabaseId },
   properties: {
-    Name: { title: [{ text: { content: event.title } }] },
+    Name: { title: [{ text: { content: String(event.title ?? '') } }] },
     Matiere: { rich_text: [{ text: { content: event.subject || 'Sans matiere' } }] },
-    Jour: { rich_text: [{ text: { content: event.day } }] },
-    Horaire: { rich_text: [{ text: { content: `${event.startTime} - ${event.endTime}` } }] },
-    Tags: { multi_select: (event.tags ?? []).map((tag) => ({ name: tag })) },
+    Jour: { rich_text: [{ text: { content: String(event.day ?? '') } }] },
+    Horaire: { rich_text: [{ text: { content: `${event.startTime ?? ''} - ${event.endTime ?? ''}` } }] },
+    Tags: { multi_select: Array.isArray(event.tags) ? event.tags.map((tag) => ({ name: String(tag) })) : [] },
   },
 });
 
@@ -56,7 +80,8 @@ const server = createServer(async (request, response) => {
       'Access-Control-Allow-Credentials': 'true',
       'Access-Control-Allow-Headers': 'Content-Type',
       'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Origin': appOrigin,
+      'Access-Control-Allow-Origin': getAllowedOrigin(request),
+      Vary: 'Origin',
     });
     response.end();
     return;
@@ -64,12 +89,16 @@ const server = createServer(async (request, response) => {
 
   if (request.method === 'GET' && requestUrl.pathname === '/api/notion/oauth/start') {
     if (!notionClientId || !notionRedirectUri) {
-      sendJson(response, 500, { error: 'NOTION_CLIENT_ID et NOTION_REDIRECT_URI sont requis.' });
+      sendJson(request, response, 500, { error: 'Configurez NOTION_CLIENT_ID et NOTION_REDIRECT_URI dans .env.' });
       return;
     }
 
     const state = randomBytes(24).toString('hex');
-    oauthStates.set(state, { createdAt: Date.now() });
+    const origin = getAllowedOrigin(request);
+    oauthStates.set(state, {
+      createdAt: Date.now(),
+      appCallbackUri: `${origin}/?notion_connected=true`,
+    });
     const authorizeUrl = new URL('https://api.notion.com/v1/oauth/authorize');
     authorizeUrl.searchParams.set('client_id', notionClientId);
     authorizeUrl.searchParams.set('response_type', 'code');
@@ -81,18 +110,25 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === 'GET' && requestUrl.pathname === '/api/notion/config') {
+    sendJson(request, response, 200, {
+      configured: Boolean(notionClientId && notionClientSecret && notionRedirectUri && notionDatabaseId),
+    });
+    return;
+  }
+
   if (request.method === 'GET' && requestUrl.pathname === '/api/notion/oauth/callback') {
     const state = requestUrl.searchParams.get('state');
     const code = requestUrl.searchParams.get('code');
     const oauthState = state ? oauthStates.get(state) : undefined;
     if (!state || !code || !oauthState || Date.now() - oauthState.createdAt > 10 * 60 * 1000) {
-      sendJson(response, 400, { error: 'Etat OAuth invalide ou expire.' });
+      sendJson(request, response, 400, { error: 'Etat OAuth invalide ou expire.' });
       return;
     }
     oauthStates.delete(state);
 
     if (!notionClientId || !notionClientSecret || !notionRedirectUri) {
-      sendJson(response, 500, { error: 'Configuration OAuth Notion incomplete.' });
+      sendJson(request, response, 500, { error: 'Configuration OAuth Notion incomplete.' });
       return;
     }
 
@@ -105,7 +141,7 @@ const server = createServer(async (request, response) => {
       body: JSON.stringify({ grant_type: 'authorization_code', code, redirect_uri: notionRedirectUri }),
     });
     if (!tokenResponse.ok) {
-      sendJson(response, 502, { error: 'Notion a refuse l echange OAuth.' });
+      sendJson(request, response, 502, { error: 'Notion a refuse l echange OAuth.' });
       return;
     }
 
@@ -114,25 +150,25 @@ const server = createServer(async (request, response) => {
     sessions.set(sessionId, { accessToken: token.access_token, createdAt: Date.now() });
     response.writeHead(302, {
       'Set-Cookie': `notion_session=${sessionId}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`,
-      Location: notionAppCallbackUri,
+      Location: oauthState.appCallbackUri || notionAppCallbackUri,
     });
     response.end();
     return;
   }
 
   if (request.method === 'GET' && requestUrl.pathname === '/api/notion/session') {
-    sendJson(response, 200, { connected: Boolean(sessions.get(parseCookies(request).notion_session)) });
+    sendJson(request, response, 200, { connected: Boolean(sessions.get(parseCookies(request).notion_session)) });
     return;
   }
 
   if (request.method === 'POST' && requestUrl.pathname === '/api/notion/export') {
     const session = sessions.get(parseCookies(request).notion_session);
     if (!session) {
-      sendJson(response, 401, { error: 'Connexion Notion requise.' });
+      sendJson(request, response, 401, { error: 'Connexion Notion requise.' });
       return;
     }
     if (!notionDatabaseId) {
-      sendJson(response, 500, { error: 'NOTION_DATABASE_ID est requis.' });
+      sendJson(request, response, 500, { error: 'Configurez NOTION_DATABASE_ID dans .env.' });
       return;
     }
 
@@ -140,11 +176,11 @@ const server = createServer(async (request, response) => {
     try {
       body = await readJsonBody(request);
     } catch {
-      sendJson(response, 400, { error: 'Le corps de la requete est invalide.' });
+      sendJson(request, response, 400, { error: 'Le corps de la requete est invalide.' });
       return;
     }
     if (!Array.isArray(body.events)) {
-      sendJson(response, 400, { error: 'La liste des cours est invalide.' });
+      sendJson(request, response, 400, { error: 'La liste des cours est invalide.' });
       return;
     }
 
@@ -160,17 +196,17 @@ const server = createServer(async (request, response) => {
         body: JSON.stringify(createNotionPage(event)),
       });
       if (!notionResponse.ok) {
-        sendJson(response, 502, { error: `Notion a refuse le cours "${event.title}".` });
+        sendJson(request, response, 502, { error: `Notion a refuse le cours "${event.title}".` });
         return;
       }
       exported += 1;
     }
 
-    sendJson(response, 200, { exported });
+    sendJson(request, response, 200, { exported });
     return;
   }
 
-  sendJson(response, 404, { error: 'Route introuvable.' });
+  sendJson(request, response, 404, { error: 'Route introuvable.' });
 });
 
 server.listen(port, () => {

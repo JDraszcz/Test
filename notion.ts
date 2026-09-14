@@ -21,11 +21,22 @@ export type ExportableCourse = {
   tags: string[];
 };
 
-const notionApiUrl = process.env.EXPO_PUBLIC_NOTION_API_URL ?? 'http://localhost:8787';
+const notionApiUrl =
+  process.env.EXPO_PUBLIC_NOTION_API_URL ??
+  (typeof window !== 'undefined' && window.location.hostname
+    ? `http://${window.location.hostname}:8787`
+    : 'http://localhost:8787');
 const NOTION_DATABASE_ID_PLACEHOLDER = 'NOTION_DATABASE_ID';
 
 export const getNotionAuthorizationUrl = () => {
   return `${notionApiUrl}/api/notion/oauth/start`;
+};
+
+export const getNotionConfiguration = async () => {
+  const response = await fetch(`${notionApiUrl}/api/notion/config`);
+  if (!response.ok) return false;
+  const configuration = await response.json() as { configured?: boolean };
+  return configuration.configured === true;
 };
 
 export const buildNotionExportPayload = (events: ExportableCourse[]): NotionCoursePage[] =>
