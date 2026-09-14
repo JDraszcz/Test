@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Linking } from 'react-native';
 import { exportEventsToNotion, getNotionAuthorizationUrl, getNotionConfiguration, getNotionSession } from './notion';
 import {
@@ -30,6 +30,7 @@ type CourseEvent = {
     format: 'm4a' | 'webm';
     estimatedSizeKb: number;
   };
+  audioUrl?: string;
   transcription?: string;
   summary?: string;
   imageConcept?: string;
@@ -132,6 +133,10 @@ export default function App() {
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordingEventIdRef = useRef<string | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<CourseEvent | null>(null);
+  const [openTimePicker, setOpenTimePicker] = useState<'start' | 'end' | null>(null);
+  const [tagDraft, setTagDraft] = useState('');
+  const [transcriptionStatus, setTranscriptionStatus] = useState('');
 
   useEffect(() => {
     const webCallback = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('notion_connected') === 'true';
@@ -168,6 +173,12 @@ export default function App() {
       window.localStorage.setItem('cours-categories', JSON.stringify(savedCategories));
     }
   }, [savedCategories]);
+
+  useEffect(() => {
+    if (!selectedEvent) return;
+    const currentEvent = events.find((event) => event.id === selectedEvent.id);
+    if (currentEvent && currentEvent !== selectedEvent) setSelectedEvent(currentEvent);
+  }, [events, selectedEvent]);
 
   const availableTags = useMemo(
     () => ['Tous', ...new Set(events.flatMap((event) => event.tags))],
@@ -212,6 +223,23 @@ export default function App() {
 
   const createImageConcept = (title: string) =>
     `Image suggérée : schéma pédagogique pour ${title} (mind map + points clés du cours).`;
+
+  const addTagToForm = (value: string) => {
+    const tag = value.trim().replace(/,/g, '');
+    if (!tag) return;
+    const tags = form.tags.split(',').map((item) => item.trim()).filter(Boolean);
+    if (!tags.includes(tag)) {
+      setForm((previous) => ({ ...previous, tags: [...tags, tag].join(',') }));
+    }
+    setTagDraft('');
+  };
+
+  const removeTagFromForm = (tagToRemove: string) => {
+    setForm((previous) => ({
+      ...previous,
+      tags: previous.tags.split(',').map((tag) => tag.trim()).filter((tag) => tag && tag !== tagToRemove).join(','),
+    }));
+  };
 
   const addEvent = () => {
     if (!form.title.trim()) {
@@ -266,21 +294,15 @@ export default function App() {
       recorder.onstop = () => {
         stream.getTracks().forEach((track) => track.stop());
         setIsRecording(false);
-        setRecordingStatus('Enregistrement terminé. Retranscription en cours…');
+        setRecordingStatus('Enregistrement terminé. Ouvrez le détail pour lancer la transcription.');
         setEvents((previous) => previous.map((item) => item.id === event.id
           ? {
               ...item,
-              recordingStatus: 'transcribing',
+              recordingStatus: 'ready',
               audioFile: { filename: `cours-${event.id}.webm`, format: 'webm', estimatedSizeKb: Math.max(1, Math.round(chunks.reduce((total, chunk) => total + chunk.size, 0) / 1024)) },
-              transcription: createTranscript(event.title),
-              summary: createSummary(event.title),
-              imageConcept: createImageConcept(event.title),
+              audioUrl: typeof URL !== 'undefined' ? URL.createObjectURL(new Blob(chunks, { type: 'audio/webm' })) : undefined,
             }
           : item));
-        setTimeout(() => {
-          setEvents((previous) => previous.map((item) => item.id === event.id ? { ...item, recordingStatus: 'ready' } : item));
-          setRecordingStatus('Retranscription terminée.');
-        }, 700);
       };
       mediaRecorderRef.current = recorder;
       recordingStreamRef.current = stream;
@@ -312,6 +334,19 @@ export default function App() {
       return;
     }
     void startAudioCapture(event);
+  };
+
+  const startTranscription = (event: CourseEvent) => {
+    setTranscriptionStatus('Transcription en cours…');
+    setTimeout(() => {
+      setEvents((previous) => previous.map((item) => item.id === event.id
+        ? { ...item, transcription: createTranscript(item.title), recordingStatus: 'ready' }
+        : item));
+      setSelectedEvent((previous) => previous?.id === event.id
+        ? { ...event, transcription: createTranscript(event.title), recordingStatus: 'ready' }
+        : previous);
+      setTranscriptionStatus('Transcription terminée. (Mode démonstration : raccordez un moteur STT pour transcrire le fichier.)');
+    }, 700);
   };
 
   const toggleMicTest = async () => {
@@ -483,6 +518,7 @@ export default function App() {
           value={searchQuery}
           onChangeText={setSearchQuery}
           placeholder="Rechercher un cours ou un tag"
+          placeholderTextColor="#a7afc0"
         />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagRow}>
           {availableTags.map((tag) => (
@@ -504,57 +540,10 @@ export default function App() {
             <Text style={styles.emptyText}>Aucun cours planifié.</Text>
           ) : (
             dayEvents.map((event) => (
-              <View key={event.id} style={styles.eventCard}>
-                <Text style={styles.eventTitle}>{event.title}</Text>
-                <Text style={styles.eventTime}>
-                  {event.startTime} - {event.endTime}
-                </Text>
-                {event.tags.length > 0 && (
-                  <View style={styles.eventTagRow}>
-                    {event.tags.map((tag) => (
-                      <Text key={tag} style={styles.eventTag}>{tag}</Text>
-                    ))}
-                  </View>
-                )}
-
-                {event.audioEnabled ? (
-                  <View style={styles.outputBlock}>
-                    <Pressable
-                      style={[styles.recordButton, event.recordingStatus === 'recording' && styles.recordButtonActive]}
-                      onPress={() => startNotesForEvent(event)}
-                    >
-                      <Text style={styles.recordButtonText}>
-                        {event.recordingStatus === 'recording' ? 'Arrêter la prise de notes' : 'Démarrer la prise de notes audio'}
-                      </Text>
-                    </Pressable>
-                    {!!recordingStatus && recordingEventIdRef.current === event.id && (
-                      <Text style={styles.recordingStatus}>{recordingStatus}</Text>
-                    )}
-                    {event.audioFile && (
-                    <>
-                    <Text style={styles.outputTitle}>Audio</Text>
-                    <Text style={styles.outputText}>
-                      {event.audioFile.filename} ({event.audioFile.format.toUpperCase()}) • ~{event.audioFile.estimatedSizeKb} KB
-                    </Text>
-                    <Text style={styles.outputText}>
-                      Captation audio activée
-                    </Text>
-
-                    <Text style={styles.outputTitle}>Transcription</Text>
-                    <Text style={styles.outputText}>{event.transcription}</Text>
-
-                    <Text style={styles.outputTitle}>Synthèse</Text>
-                    <Text style={styles.outputText}>{event.summary}</Text>
-
-                    <Text style={styles.outputTitle}>Création d'image</Text>
-                    <Text style={styles.outputText}>{event.imageConcept}</Text>
-                    </>
-                    )}
-                  </View>
-                ) : (
-                  <Text style={styles.outputText}>Pas d'enregistrement demandé.</Text>
-                )}
-              </View>
+              <Pressable key={event.id} style={styles.eventBubble} onPress={() => setSelectedEvent(event)}>
+                <Text style={styles.eventBubbleTitle}>{event.title || event.subject}</Text>
+                <Text style={styles.eventBubbleTime}>{event.startTime} · {event.endTime}</Text>
+              </Pressable>
             ))
           )}
         </View>
@@ -577,21 +566,96 @@ export default function App() {
               {weekDays.map((day) => <Pressable key={day} style={[styles.dayButton, form.day === day && styles.dayButtonSelected]} onPress={() => setForm((previous) => ({ ...previous, day }))}><Text style={form.day === day ? styles.dayButtonTextSelected : styles.dayButtonText}>{day}</Text></Pressable>)}
             </View>
             <Text style={styles.label}>Matière</Text>
-            <TextInput style={styles.input} value={form.subject} onChangeText={(subject) => setForm((previous) => ({ ...previous, subject }))} placeholder="Ex. Mathématiques" />
+            <TextInput style={styles.input} value={form.subject} onChangeText={(subject) => setForm((previous) => ({ ...previous, subject }))} placeholder="Ex. Mathématiques" placeholderTextColor="#a7afc0" />
             <Text style={styles.label}>Nom du cours</Text>
-            <TextInput style={styles.input} value={form.title} onChangeText={(title) => setForm((previous) => ({ ...previous, title }))} placeholder="Ex. Fonctions" />
+            <TextInput style={styles.input} value={form.title} onChangeText={(title) => setForm((previous) => ({ ...previous, title }))} placeholder="Ex. Fonctions" placeholderTextColor="#a7afc0" />
             <Text style={styles.label}>Catégories</Text>
-            <TextInput style={styles.input} value={form.tags} onChangeText={(tags) => setForm((previous) => ({ ...previous, tags }))} placeholder="Ex. examen, sciences" />
-            {savedCategories.length > 0 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagRow}>{savedCategories.map((tag) => <Pressable key={tag} style={styles.tagButton} onPress={() => setForm((previous) => ({ ...previous, tags: previous.tags ? `${previous.tags}, ${tag}` : tag }))}><Text style={styles.tagButtonText}>{tag}</Text></Pressable>)}</ScrollView>}
+            <View style={styles.tagEditor}>
+              {form.tags.split(',').map((tag) => tag.trim()).filter(Boolean).map((tag) => (
+                <Pressable key={tag} style={styles.tagPill} onPress={() => removeTagFromForm(tag)}>
+                  <Text style={styles.tagPillText}>{tag} ×</Text>
+                </Pressable>
+              ))}
+              <TextInput
+                style={styles.tagInput}
+                value={tagDraft}
+                onChangeText={setTagDraft}
+                onSubmitEditing={() => addTagToForm(tagDraft)}
+                onKeyPress={({ nativeEvent }) => {
+                  if (nativeEvent.key === 'Enter') addTagToForm(tagDraft);
+                }}
+                placeholder="Saisir un mot-clé puis Entrée"
+                placeholderTextColor="#a7afc0"
+              />
+            </View>
+            {savedCategories.filter((tag) => !form.tags.split(',').includes(tag)).length > 0 && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tagRow}>
+                {savedCategories.filter((tag) => !form.tags.split(',').includes(tag)).map((tag) => (
+                  <Pressable key={tag} style={styles.tagSuggestion} onPress={() => addTagToForm(tag)}>
+                    <Text style={styles.tagSuggestionText}>+ {tag}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
             <View style={styles.timeRow}>
-              <View style={styles.timeField}><Text style={styles.label}>Début</Text><ScrollView style={styles.timePicker} nestedScrollEnabled>{timeSlots.map((time) => <Pressable key={`start-${time}`} style={[styles.timeOption, form.startTime === time && styles.timeOptionSelected]} onPress={() => setForm((previous) => ({ ...previous, startTime: time }))}><Text style={styles.timeOptionText}>{time}</Text></Pressable>)}</ScrollView></View>
-              <View style={styles.timeField}><Text style={styles.label}>Fin</Text><ScrollView style={styles.timePicker} nestedScrollEnabled>{timeSlots.map((time) => <Pressable key={`end-${time}`} style={[styles.timeOption, form.endTime === time && styles.timeOptionSelected]} onPress={() => setForm((previous) => ({ ...previous, endTime: time }))}><Text style={styles.timeOptionText}>{time}</Text></Pressable>)}</ScrollView></View>
+              {(['start', 'end'] as const).map((kind) => (
+                <View key={kind} style={styles.timeField}>
+                  <Text style={styles.label}>{kind === 'start' ? 'Début' : 'Fin'}</Text>
+                  <Pressable style={styles.timeDropdown} onPress={() => setOpenTimePicker(openTimePicker === kind ? null : kind)}>
+                    <Text style={styles.timeOptionText}>{kind === 'start' ? form.startTime : form.endTime}</Text>
+                    <Text style={styles.dropdownChevron}>⌄</Text>
+                  </Pressable>
+                  {openTimePicker === kind && <ScrollView style={styles.timeMenu} nestedScrollEnabled>
+                    {timeSlots.filter((time) => time !== (kind === 'start' ? form.startTime : form.endTime)).map((time) => (
+                      <Pressable key={time} style={styles.timeOption} onPress={() => {
+                        setForm((previous) => ({ ...previous, [kind === 'start' ? 'startTime' : 'endTime']: time }));
+                        setOpenTimePicker(null);
+                      }}>
+                        <Text style={styles.timeOptionText}>{time}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>}
+                </View>
+              ))}
             </View>
             <View style={styles.switchRow}><Text style={styles.switchLabel}>Avoir une synthèse courte (en développement)</Text><Switch value={true} disabled /></View>
             <Pressable style={styles.primaryButton} onPress={addEvent}><Text style={styles.primaryButtonText}>Démarrer la prise de notes audio</Text></Pressable>
             {!!formError && <Text style={styles.formError}>{formError}</Text>}
             <Text style={styles.modalHint}>La captation démarre dès la validation. Vous pouvez l’arrêter depuis la carte du cours ou elle s’arrêtera automatiquement à l’heure de fin.</Text>
           </View>
+        </View>
+      </Modal>
+      <Modal visible={!!selectedEvent} transparent animationType="fade" onRequestClose={() => setSelectedEvent(null)}>
+        <View style={styles.modalBackdrop}>
+          {selectedEvent && <View style={styles.eventModal}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>{selectedEvent.title}</Text>
+                <Text style={styles.cardSubtitle}>{selectedEvent.subject} · {selectedEvent.day} · {selectedEvent.startTime} - {selectedEvent.endTime}</Text>
+              </View>
+              <Pressable onPress={() => setSelectedEvent(null)}><Text style={styles.closeButton}>×</Text></Pressable>
+            </View>
+            <View style={styles.detailTagRow}>
+              {selectedEvent.tags.map((tag) => <Text key={tag} style={styles.tagPillText}>{tag}</Text>)}
+            </View>
+            {selectedEvent.audioUrl ? (
+              <View style={styles.audioPlayer}>
+                {typeof document !== 'undefined'
+                  ? React.createElement('audio', { controls: true, src: selectedEvent.audioUrl, style: { width: '100%' } })
+                  : <Text style={styles.outputText}>Lecteur audio disponible dans la version web.</Text>}
+              </View>
+            ) : <Text style={styles.modalHint}>Aucun fichier audio enregistré pour ce cours.</Text>}
+            {selectedEvent.audioUrl && <Pressable style={styles.primaryButton} onPress={() => startTranscription(selectedEvent)}>
+              <Text style={styles.primaryButtonText}>Démarrer la transcription</Text>
+            </Pressable>}
+            {!!transcriptionStatus && <Text style={styles.recordingStatus}>{transcriptionStatus}</Text>}
+            {!!selectedEvent.transcription && <View style={styles.detailSection}><Text style={styles.outputTitle}>Transcription</Text><Text style={styles.outputText}>{selectedEvent.transcription}</Text></View>}
+            {!!selectedEvent.summary && <View style={styles.detailSection}><Text style={styles.outputTitle}>Synthèse</Text><Text style={styles.outputText}>{selectedEvent.summary}</Text></View>}
+            <Pressable style={[styles.recordButton, selectedEvent.recordingStatus === 'recording' && styles.recordButtonActive]} onPress={() => startNotesForEvent(selectedEvent)}>
+              <Text style={styles.recordButtonText}>{selectedEvent.recordingStatus === 'recording' ? 'Arrêter la prise de notes' : 'Démarrer la prise de notes audio'}</Text>
+            </Pressable>
+            {!!recordingStatus && recordingEventIdRef.current === selectedEvent.id && <Text style={styles.recordingStatus}>{recordingStatus}</Text>}
+          </View>}
         </View>
       </Modal>
       <StatusBar style="auto" />
@@ -788,6 +852,83 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#5367e8',
     marginBottom: 8,
+  },
+  tagEditor: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#dce2ef',
+    borderRadius: 12,
+    padding: 7,
+    marginBottom: 8,
+  },
+  tagPill: {
+    borderRadius: 14,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    backgroundColor: '#e7eaff',
+  },
+  tagPillText: {
+    color: '#4356c7',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  tagInput: {
+    flexGrow: 1,
+    minWidth: 170,
+    paddingVertical: 5,
+    color: '#18223d',
+  },
+  tagSuggestion: {
+    borderRadius: 14,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    backgroundColor: '#f0f2f7',
+  },
+  tagSuggestionText: {
+    color: '#69758f',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  timeDropdown: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: '#dce2ef',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+  },
+  timeMenu: {
+    maxHeight: 130,
+    marginTop: 5,
+    borderWidth: 1,
+    borderColor: '#dce2ef',
+    borderRadius: 12,
+    backgroundColor: '#fff',
+  },
+  audioPlayer: {
+    marginVertical: 14,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#f5f7fb',
+  },
+  detailTagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  detailSection: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#f5f7fb',
   },
   recordButtonActive: {
     backgroundColor: '#d94f5c',
@@ -1022,6 +1163,26 @@ const styles = StyleSheet.create({
     color: '#f6d8b8',
     fontSize: 12,
     marginTop: 10,
+  },
+  eventBubble: {
+    alignSelf: 'flex-start',
+    minWidth: 180,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginTop: 8,
+    backgroundColor: '#eef0ff',
+    borderWidth: 1,
+    borderColor: '#d7dcff',
+  },
+  eventBubbleTitle: {
+    color: '#29366e',
+    fontWeight: '800',
+  },
+  eventBubbleTime: {
+    color: '#69758f',
+    fontSize: 12,
+    marginTop: 3,
   },
   sectionTitle: {
     color: '#18223d',
