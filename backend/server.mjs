@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { URL } from 'node:url';
 
 const loadDotEnv = async () => {
@@ -27,6 +27,28 @@ const notionAppCallbackUri = process.env.NOTION_APP_CALLBACK_URI ?? `${appOrigin
 const notionDatabaseId = process.env.NOTION_DATABASE_ID;
 const sessions = new Map();
 const oauthStates = new Map();
+const eventsFile = new URL('./events.json', import.meta.url);
+
+const readEvents = async () => {
+  try {
+    const events = JSON.parse(await readFile(eventsFile, 'utf8'));
+    return Array.isArray(events) ? events : [];
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+};
+
+const writeEvents = (events) => writeFile(eventsFile, `${JSON.stringify(events, null, 2)}\n`, 'utf8');
+
+const validateEvent = (event) => {
+  if (!event || typeof event !== 'object') return 'Le cours est invalide.';
+  if (!String(event.id ?? '').trim() || !String(event.title ?? '').trim()) return 'Identifiant et nom du cours requis.';
+  if (!String(event.day ?? '').trim()) return 'Jour du cours requis.';
+  if (!/^\d{2}:[03]0$/.test(String(event.startTime ?? '')) || !/^\d{2}:[03]0$/.test(String(event.endTime ?? ''))) return 'Les horaires doivent être des tranches de 30 minutes.';
+  if (!Array.isArray(event.tags) || event.tags.some((tag) => typeof tag !== 'string')) return 'Les catégories sont invalides.';
+  return null;
+};
 
 const getAllowedOrigin = (request) => {
   const origin = request.headers.origin;
@@ -79,11 +101,82 @@ const server = createServer(async (request, response) => {
     response.writeHead(204, {
       'Access-Control-Allow-Credentials': 'true',
       'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
       'Access-Control-Allow-Origin': getAllowedOrigin(request),
       Vary: 'Origin',
     });
     response.end();
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/events') {
+    let events;
+    try {
+      events = await readEvents();
+    } catch {
+      sendJson(request, response, 500, { error: 'Lecture des cours impossible.' });
+      return;
+    }
+    if (request.method === 'GET') {
+      sendJson(request, response, 200, { events });
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch {
+      sendJson(request, response, 400, { error: 'Le corps de la requête est invalide.' });
+      return;
+    }
+    if (request.method === 'POST') {
+      const error = validateEvent(body);
+      if (error) {
+        sendJson(request, response, 400, { error });
+        return;
+      }
+      if (events.some((event) => event.id === body.id)) {
+        sendJson(request, response, 409, { error: 'Ce cours existe déjà.' });
+        return;
+      }
+      await writeEvents([...events, body]);
+      sendJson(request, response, 201, { event: body });
+      return;
+    }
+    sendJson(request, response, 405, { error: 'Méthode non autorisée sur cette route.' });
+    return;
+  }
+
+  const eventMatch = requestUrl.pathname.match(/^\/api\/events\/([^/]+)$/);
+  if (eventMatch && (request.method === 'PATCH' || request.method === 'DELETE')) {
+    const eventId = decodeURIComponent(eventMatch[1]);
+    const events = await readEvents();
+    const index = events.findIndex((event) => event.id === eventId);
+    if (index < 0) {
+      sendJson(request, response, 404, { error: 'Cours introuvable.' });
+      return;
+    }
+    if (request.method === 'DELETE') {
+      events.splice(index, 1);
+      await writeEvents(events);
+      sendJson(request, response, 200, { deleted: eventId });
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch {
+      sendJson(request, response, 400, { error: 'Le corps de la requête est invalide.' });
+      return;
+    }
+    const updated = { ...events[index], ...body, id: eventId };
+    const error = validateEvent(updated);
+    if (error) {
+      sendJson(request, response, 400, { error });
+      return;
+    }
+    events[index] = updated;
+    await writeEvents(events);
+    sendJson(request, response, 200, { event: updated });
     return;
   }
 

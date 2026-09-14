@@ -10,6 +10,7 @@ Application mobile Expo (React Native + TypeScript) pour gérer un agenda hebdom
 - Catégories réutilisables et conservées localement pour relier les cours entre eux.
 - Tags de cours sous forme de pastilles, ajoutés avec la touche Entrée comme dans Notion.
 - Agenda compact : chaque cours ouvre une fiche détaillée avec lecteur audio et action de transcription.
+- Modification et suppression des cours depuis leur fiche, avec notes manuscrites associées.
 - Captation audio réelle dans les navigateurs compatibles, avec arrêt manuel ou à l'heure de fin.
 - Sorties par évènement :
   - fichier audio capturé dans le navigateur (WebM),

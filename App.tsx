@@ -35,6 +35,7 @@ type CourseEvent = {
   summary?: string;
   imageConcept?: string;
   recordingStatus?: 'planned' | 'recording' | 'transcribing' | 'ready';
+  notes?: string;
 };
 
 const weekDays: WeekDay[] = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
@@ -76,7 +77,7 @@ const createWeekOptions = (): WeekOption[] => {
 };
 
 const weekOptions = createWeekOptions();
-const timeSlots = Array.from({ length: 29 }, (_, index) => {
+const timeSlots = Array.from({ length: 36 }, (_, index) => {
   const minutes = 6 * 60 + index * 30;
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 });
@@ -88,7 +89,12 @@ const initialForm = {
   startTime: '08:00',
   endTime: '09:00',
   tags: '',
+  notes: '',
 };
+
+const eventsApiUrl =
+  process.env.EXPO_PUBLIC_NOTES_API_URL ??
+  (typeof window !== 'undefined' && window.location.hostname ? `http://${window.location.hostname}:8787/api/events` : 'http://localhost:8787/api/events');
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -137,6 +143,9 @@ export default function App() {
   const [openTimePicker, setOpenTimePicker] = useState<'start' | 'end' | null>(null);
   const [tagDraft, setTagDraft] = useState('');
   const [transcriptionStatus, setTranscriptionStatus] = useState('');
+  const [isBackendAvailable, setIsBackendAvailable] = useState(true);
+  const [isEditingEvent, setIsEditingEvent] = useState(false);
+  const [notesDraft, setNotesDraft] = useState('');
 
   useEffect(() => {
     const webCallback = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('notion_connected') === 'true';
@@ -179,6 +188,16 @@ export default function App() {
     const currentEvent = events.find((event) => event.id === selectedEvent.id);
     if (currentEvent && currentEvent !== selectedEvent) setSelectedEvent(currentEvent);
   }, [events, selectedEvent]);
+
+  useEffect(() => {
+    fetch(eventsApiUrl)
+      .then((response) => {
+        if (!response.ok) throw new Error('Backend indisponible');
+        return response.json() as Promise<{ events?: CourseEvent[] }>;
+      })
+      .then((payload) => setEvents(payload.events ?? []))
+      .catch(() => setIsBackendAvailable(false));
+  }, []);
 
   const availableTags = useMemo(
     () => ['Tous', ...new Set(events.flatMap((event) => event.tags))],
@@ -271,14 +290,72 @@ export default function App() {
       tags,
       audioEnabled: true,
       recordingStatus: 'planned',
+      notes: form.notes,
     };
 
     setEvents((previous) => [...previous, nextEvent]);
+    void fetch(eventsApiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nextEvent) })
+      .then((response) => { if (!response.ok) throw new Error('Création impossible'); })
+      .catch(() => setIsBackendAvailable(false));
     setSavedCategories((previous) => [...new Set([...previous, ...tags])]);
     setForm(initialForm);
     setIsEventModalOpen(false);
     setFormError('');
     void startAudioCapture(nextEvent);
+  };
+
+  const updateEvent = async () => {
+    if (!selectedEvent || !form.title.trim() || form.startTime >= form.endTime) {
+      setFormError('Vérifiez le nom du cours et les horaires.');
+      return;
+    }
+    const updated = {
+      ...selectedEvent,
+      day: form.day,
+      subject: form.subject.trim() || 'Sans matière',
+      title: form.title.trim(),
+      startTime: form.startTime,
+      endTime: form.endTime,
+      tags: form.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      notes: form.notes,
+    };
+    setEvents((previous) => previous.map((event) => event.id === updated.id ? updated : event));
+    try {
+      const response = await fetch(`${eventsApiUrl}/${encodeURIComponent(updated.id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updated) });
+      if (!response.ok) throw new Error('Modification impossible');
+      setSelectedEvent(updated);
+      setIsEditingEvent(false);
+    } catch {
+      setIsBackendAvailable(false);
+      setFormError('Modification locale effectuée, mais synchronisation backend impossible.');
+    }
+  };
+
+  const deleteEvent = async (event: CourseEvent) => {
+    setEvents((previous) => previous.filter((item) => item.id !== event.id));
+    setSelectedEvent(null);
+    try {
+      const response = await fetch(`${eventsApiUrl}/${encodeURIComponent(event.id)}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Suppression impossible');
+    } catch {
+      setIsBackendAvailable(false);
+    }
+  };
+
+  const openEditEvent = (event: CourseEvent) => {
+    setForm({
+      day: event.day,
+      subject: event.subject,
+      title: event.title,
+      startTime: event.startTime,
+      endTime: event.endTime,
+      tags: event.tags.join(','),
+      notes: event.notes ?? '',
+    });
+    setNotesDraft(event.notes ?? '');
+    setIsEditingEvent(true);
+    setSelectedEvent(null);
+    setIsEventModalOpen(true);
   };
 
   const startAudioCapture = async (event: CourseEvent) => {
@@ -556,8 +633,8 @@ export default function App() {
           <View style={styles.eventModal}>
             <View style={styles.modalHeader}>
               <View>
-                <Text style={styles.sectionTitle}>Nouveau cours</Text>
-                <Text style={styles.cardSubtitle}>Ajoutez un cours à votre agenda</Text>
+                <Text style={styles.sectionTitle}>{isEditingEvent ? 'Modifier le cours' : 'Nouveau cours'}</Text>
+                <Text style={styles.cardSubtitle}>{isEditingEvent ? 'Mettez à jour les informations et vos notes' : 'Ajoutez un cours à votre agenda'}</Text>
               </View>
               <Pressable onPress={() => setIsEventModalOpen(false)}><Text style={styles.closeButton}>×</Text></Pressable>
             </View>
@@ -597,6 +674,16 @@ export default function App() {
                 ))}
               </ScrollView>
             )}
+            <Text style={styles.label}>Notes manuscrites</Text>
+            <TextInput
+              style={styles.handwrittenNotes}
+              multiline
+              value={form.notes}
+              onChangeText={(notes) => setForm((previous) => ({ ...previous, notes }))}
+              placeholder="Écrivez vos notes de cours ici…"
+              placeholderTextColor="#a7afc0"
+              textAlignVertical="top"
+            />
             <View style={styles.timeRow}>
               {(['start', 'end'] as const).map((kind) => (
                 <View key={kind} style={styles.timeField}>
@@ -619,7 +706,7 @@ export default function App() {
               ))}
             </View>
             <View style={styles.switchRow}><Text style={styles.switchLabel}>Avoir une synthèse courte (en développement)</Text><Switch value={true} disabled /></View>
-            <Pressable style={styles.primaryButton} onPress={addEvent}><Text style={styles.primaryButtonText}>Démarrer la prise de notes audio</Text></Pressable>
+            <Pressable style={styles.primaryButton} onPress={isEditingEvent ? updateEvent : addEvent}><Text style={styles.primaryButtonText}>{isEditingEvent ? 'Enregistrer les modifications' : 'Démarrer la prise de notes audio'}</Text></Pressable>
             {!!formError && <Text style={styles.formError}>{formError}</Text>}
             <Text style={styles.modalHint}>La captation démarre dès la validation. Vous pouvez l’arrêter depuis la carte du cours ou elle s’arrêtera automatiquement à l’heure de fin.</Text>
           </View>
@@ -651,6 +738,11 @@ export default function App() {
             {!!transcriptionStatus && <Text style={styles.recordingStatus}>{transcriptionStatus}</Text>}
             {!!selectedEvent.transcription && <View style={styles.detailSection}><Text style={styles.outputTitle}>Transcription</Text><Text style={styles.outputText}>{selectedEvent.transcription}</Text></View>}
             {!!selectedEvent.summary && <View style={styles.detailSection}><Text style={styles.outputTitle}>Synthèse</Text><Text style={styles.outputText}>{selectedEvent.summary}</Text></View>}
+            {!!selectedEvent.notes && <View style={styles.handwrittenPreview}><Text style={styles.outputTitle}>Notes manuscrites</Text><Text style={styles.handwrittenText}>{selectedEvent.notes}</Text></View>}
+            <View style={styles.detailActions}>
+              <Pressable style={styles.secondaryButton} onPress={() => openEditEvent(selectedEvent)}><Text style={styles.secondaryButtonText}>Modifier</Text></Pressable>
+              <Pressable style={styles.deleteButton} onPress={() => void deleteEvent(selectedEvent)}><Text style={styles.deleteButtonText}>Supprimer</Text></Pressable>
+            </View>
             <Pressable style={[styles.recordButton, selectedEvent.recordingStatus === 'recording' && styles.recordButtonActive]} onPress={() => startNotesForEvent(selectedEvent)}>
               <Text style={styles.recordButtonText}>{selectedEvent.recordingStatus === 'recording' ? 'Arrêter la prise de notes' : 'Démarrer la prise de notes audio'}</Text>
             </Pressable>
@@ -941,6 +1033,47 @@ const styles = StyleSheet.create({
     color: '#5367e8',
     fontSize: 12,
     marginBottom: 8,
+  },
+  detailActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 14,
+    marginBottom: 12,
+  },
+  deleteButton: {
+    borderRadius: 12,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    backgroundColor: '#ffe9e8',
+  },
+  deleteButtonText: {
+    color: '#b42318',
+    fontWeight: '800',
+  },
+  handwrittenNotes: {
+    minHeight: 130,
+    borderWidth: 1,
+    borderColor: '#dce2ef',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    color: '#29366e',
+    fontSize: 16,
+    lineHeight: 24,
+    fontFamily: 'cursive',
+    backgroundColor: '#fffdf5',
+  },
+  handwrittenPreview: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#fffdf5',
+  },
+  handwrittenText: {
+    color: '#29366e',
+    fontSize: 16,
+    lineHeight: 24,
+    fontFamily: 'cursive',
   },
   historyMenu: {
     backgroundColor: '#fff',
